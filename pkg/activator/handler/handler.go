@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.opencensus.io/plugin/ochttp"
@@ -32,7 +33,6 @@ import (
 	"github.com/knative/serving/pkg/activator/util"
 	"github.com/knative/serving/pkg/apis/networking"
 	"github.com/knative/serving/pkg/apis/serving"
-	"github.com/knative/serving/pkg/apis/serving/v1alpha1"
 	netlisters "github.com/knative/serving/pkg/client/listers/networking/v1alpha1"
 	servinglisters "github.com/knative/serving/pkg/client/listers/serving/v1alpha1"
 	pkghttp "github.com/knative/serving/pkg/http"
@@ -127,16 +127,19 @@ func (a *activationHandler) probeEndpoint(logger *zap.SugaredLogger, r *http.Req
 func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	namespace := pkghttp.LastHeaderValue(r.Header, activator.RevisionHeaderNamespace)
 	name := pkghttp.LastHeaderValue(r.Header, activator.RevisionHeaderName)
+	protocol := networking.ProtocolHTTP1
 	start := time.Now()
 	revID := activator.RevisionID{Namespace: namespace, Name: name}
 
 	logger := a.logger.With(zap.String(logkey.Key, revID.String()))
 
 	revision, err := a.revisionLister.Revisions(namespace).Get(name)
-	if err != nil {
+	if err != nil && !k8serrors.IsNotFound(err) {
 		logger.Errorw("Error while getting revision", zap.Error(err))
 		sendError(err, w)
 		return
+	} else if err == nil {
+		protocol = revision.GetProtocol()
 	}
 
 	// SKS name matches that of revision.
@@ -146,7 +149,7 @@ func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		sendError(err, w)
 		return
 	}
-	host, err := a.serviceHostName(revision, sks.Status.PrivateServiceName)
+	host, err := a.serviceHostName(namespace, sks.Status.ServiceName, protocol)
 	if err != nil {
 		logger.Errorw("Error while getting hostname", zap.Error(err))
 		sendError(err, w)
@@ -162,7 +165,6 @@ func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var (
 			httpStatus int
 		)
-
 		success, attempts := a.probeEndpoint(logger, r, target)
 		if success {
 			// Once we see a successful probe, send traffic.
@@ -180,7 +182,7 @@ func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var configurationName string
 		var serviceName string
-		if revision.Labels != nil {
+		if revision != nil && revision.Labels != nil {
 			configurationName = revision.Labels[serving.ConfigurationLabelKey]
 			serviceName = revision.Labels[serving.ServiceLabelKey]
 		}
@@ -217,8 +219,8 @@ func (a *activationHandler) proxyRequest(w http.ResponseWriter, r *http.Request,
 
 // serviceHostName obtains the hostname of the underlying service and the correct
 // port to send requests to.
-func (a *activationHandler) serviceHostName(rev *v1alpha1.Revision, serviceName string) (string, error) {
-	svc, err := a.serviceLister.Services(rev.Namespace).Get(serviceName)
+func (a *activationHandler) serviceHostName(namespace, serviceName string, protocol networking.ProtocolType) (string, error) {
+	svc, err := a.serviceLister.Services(namespace).Get(serviceName)
 	if err != nil {
 		return "", err
 	}
@@ -226,7 +228,7 @@ func (a *activationHandler) serviceHostName(rev *v1alpha1.Revision, serviceName 
 	// Search for the appropriate port
 	port := -1
 	for _, p := range svc.Spec.Ports {
-		if p.Name == networking.ServicePortName(rev.GetProtocol()) {
+		if strings.HasPrefix(p.Name, networking.ServicePortName(protocol)) {
 			port = int(p.Port)
 			break
 		}
@@ -235,7 +237,7 @@ func (a *activationHandler) serviceHostName(rev *v1alpha1.Revision, serviceName 
 		return "", errors.New("revision needs external HTTP port")
 	}
 
-	serviceFQDN := network.GetServiceHostname(serviceName, rev.Namespace)
+	serviceFQDN := network.GetServiceHostname(serviceName, namespace)
 
 	return fmt.Sprintf("%s:%d", serviceFQDN, port), nil
 }
