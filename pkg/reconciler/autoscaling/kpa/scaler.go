@@ -192,24 +192,10 @@ func (ks *scaler) handleScaleToZero(pa *pav1alpha1.PodAutoscaler, desiredScale i
 		ks.enqueueCB(pa, config.StableWindow)
 		desiredScale = 1
 	} else { // Active=False
-		r, err := ks.activatorProbe(pa)
-		ks.logger.Infof("%s probing activator = %v, err = %v", pa.Name, r, err)
-		if r {
-			// Make sure we've been inactive for enough time.
-			if pa.Status.CanScaleToZero(config.ScaleToZeroGracePeriod) {
-				return desiredScale, true
-			}
-			// Re-enqeue the PA for reconciliation after grace period.
-			// In istio-lean this can be close to 0.
-			ks.enqueueCB(pa, config.ScaleToZeroGracePeriod)
-			return desiredScale, false
+		if pa.Status.CanScaleToZero(config.ScaleToZeroGracePeriod) {
+			return desiredScale, true
 		}
-
-		// Otherwise (any prober failure) start the async probe.
-		ks.logger.Infof("%s is not yet backed by activator, cannot scale to zero", pa.Name)
-		if !ks.probeManager.Offer(context.Background(), paToProbeTarget(pa), activator.Name, pa, probePeriod, probeTimeout) {
-			ks.logger.Infof("Probe for %s is already in flight", pa.Name)
-		}
+		ks.enqueueCB(pa, config.ScaleToZeroGracePeriod)
 		return desiredScale, false
 	}
 	return desiredScale, true

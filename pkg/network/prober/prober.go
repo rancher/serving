@@ -18,7 +18,6 @@ package prober
 
 import (
 	"context"
-	"io/ioutil"
 	"net/http"
 	"sync"
 	"time"
@@ -55,11 +54,7 @@ func Do(ctx context.Context, target, headerValue string, pos ...ProbeOption) (bo
 		return false, errors.Wrapf(err, "error roundtripping %s", target)
 	}
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return false, errors.Wrap(err, "error reading body")
-	}
-	return resp.StatusCode == http.StatusOK && string(body) == headerValue, nil
+	return resp.StatusCode != http.StatusServiceUnavailable, nil
 }
 
 // Done is a callback that is executed when the async probe has finished.

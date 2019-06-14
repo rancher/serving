@@ -20,18 +20,16 @@ import (
 	"errors"
 	"sync"
 
-	"go.uber.org/zap"
-
 	"github.com/knative/pkg/controller"
 	"github.com/knative/pkg/logging/logkey"
 	"github.com/knative/serving/pkg/apis/networking"
-	"github.com/knative/serving/pkg/apis/serving"
+	autoscalerlisters "github.com/knative/serving/pkg/client/listers/autoscaling/v1alpha1"
 	netlisters "github.com/knative/serving/pkg/client/listers/networking/v1alpha1"
 	servinglisters "github.com/knative/serving/pkg/client/listers/serving/v1alpha1"
 	"github.com/knative/serving/pkg/queue"
 	"github.com/knative/serving/pkg/reconciler"
 	"github.com/knative/serving/pkg/resources"
-
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	corev1informers "k8s.io/client-go/informers/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -51,11 +49,12 @@ type Throttler struct {
 	breakersMux sync.Mutex
 	breakers    map[RevisionID]*queue.Breaker
 
-	breakerParams   queue.BreakerParams
-	logger          *zap.SugaredLogger
-	endpointsLister corev1listers.EndpointsLister
-	revisionLister  servinglisters.RevisionLister
-	sksLister       netlisters.ServerlessServiceLister
+	breakerParams       queue.BreakerParams
+	logger              *zap.SugaredLogger
+	endpointsLister     corev1listers.EndpointsLister
+	podAutoscalerLister autoscalerlisters.PodAutoscalerLister
+	revisionLister      servinglisters.RevisionLister
+	sksLister           netlisters.ServerlessServiceLister
 }
 
 // NewThrottler creates a new Throttler.
@@ -64,15 +63,17 @@ func NewThrottler(
 	endpointsInformer corev1informers.EndpointsInformer,
 	sksLister netlisters.ServerlessServiceLister,
 	revisionLister servinglisters.RevisionLister,
+	podAutoscalerLister autoscalerlisters.PodAutoscalerLister,
 	logger *zap.SugaredLogger) *Throttler {
 
 	throttler := &Throttler{
-		breakers:        make(map[RevisionID]*queue.Breaker),
-		breakerParams:   params,
-		logger:          logger,
-		endpointsLister: endpointsInformer.Lister(),
-		revisionLister:  revisionLister,
-		sksLister:       sksLister,
+		breakers:            make(map[RevisionID]*queue.Breaker),
+		breakerParams:       params,
+		logger:              logger,
+		endpointsLister:     endpointsInformer.Lister(),
+		revisionLister:      revisionLister,
+		sksLister:           sksLister,
+		podAutoscalerLister: podAutoscalerLister,
 	}
 
 	// Update/create the breaker in the throttler when the number of endpoints changes.
@@ -82,7 +83,6 @@ func NewThrottler(
 	// networking.ServiceTypeKey == networking.ServiceTypePublic
 	endpointsInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: reconciler.ChainFilterFuncs(
-			reconciler.LabelExistsFilterFunc(serving.RevisionUID),
 			// We are only interested in the private services, since that is
 			// what is populated by the actual revision backends.
 			reconciler.LabelFilterFunc(networking.ServiceTypeKey, string(networking.ServiceTypePrivate), true),
@@ -106,12 +106,12 @@ func (t *Throttler) Remove(rev RevisionID) {
 
 // UpdateCapacity updates the max concurrency of the Breaker corresponding to a revision.
 func (t *Throttler) UpdateCapacity(rev RevisionID, size int) error {
-	revision, err := t.revisionLister.Revisions(rev.Namespace).Get(rev.Name)
+	pa, err := t.podAutoscalerLister.PodAutoscalers(rev.Namespace).Get(rev.Name)
 	if err != nil {
 		return err
 	}
 	breaker, _ := t.getOrCreateBreaker(rev)
-	return t.updateCapacity(breaker, int(revision.Spec.ContainerConcurrency), size)
+	return t.updateCapacity(breaker, int(pa.Spec.ContainerConcurrency), size)
 }
 
 // Try potentially registers a new breaker in our bookkeeping
@@ -161,7 +161,7 @@ func (t *Throttler) getOrCreateBreaker(rev RevisionID) (*queue.Breaker, bool) {
 // This avoids a potential deadlock in case if we missed the updates from the Endpoints informer.
 // This could happen because of a restart of the Activator or when a new one is added as part of scale out.
 func (t *Throttler) forceUpdateCapacity(rev RevisionID, breaker *queue.Breaker) (err error) {
-	revision, err := t.revisionLister.Revisions(rev.Namespace).Get(rev.Name)
+	pa, err := t.podAutoscalerLister.PodAutoscalers(rev.Namespace).Get(rev.Name)
 	if err != nil {
 		return err
 	}
@@ -175,11 +175,11 @@ func (t *Throttler) forceUpdateCapacity(rev RevisionID, breaker *queue.Breaker) 
 	// We have to read the private service endpoints in activator
 	// in order to count the serving pod count, since the public one
 	// may point at ourselves.
-	size, err := resources.FetchReadyAddressCount(t.endpointsLister, sks.Namespace, sks.Status.PrivateServiceName)
+	size, err := resources.FetchReadyAddressCount(t.endpointsLister, sks.Namespace, sks.Status.ServiceName)
 	if err != nil {
 		return err
 	}
-	return t.updateCapacity(breaker, int(revision.Spec.ContainerConcurrency), size)
+	return t.updateCapacity(breaker, int(pa.Spec.ContainerConcurrency), size)
 }
 
 // endpointsUpdated is a handler function to be used by the Endpoints informer.

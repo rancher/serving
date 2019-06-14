@@ -238,7 +238,6 @@ func (r *reconciler) reconcilePublicService(ctx context.Context, sks *netv1alpha
 		return err
 	} else if !metav1.IsControlledBy(srv, sks) {
 		sks.Status.MarkEndpointsNotOwned("Service", sn)
-		return fmt.Errorf("SKS: %s does not own Service: %s", sks.Name, sn)
 	} else {
 		tmpl := resources.MakePublicService(sks)
 		want := srv.DeepCopy()
@@ -308,6 +307,7 @@ func (r *reconciler) reconcilePublicEndpoints(ctx context.Context, sks *netv1alp
 	sn := names.PublicService(sks.Name)
 	eps, err := r.endpointsLister.Endpoints(sks.Namespace).Get(sn)
 
+	owned := true
 	if errors.IsNotFound(err) {
 		logger.Infof("K8s endpoints %q does not exist; creating.", sn)
 		sks.Status.MarkEndpointsNotReady("CreatingPublicEndpoints")
@@ -322,18 +322,21 @@ func (r *reconciler) reconcilePublicEndpoints(ctx context.Context, sks *netv1alp
 		return err
 	} else if !metav1.IsControlledBy(eps, sks) {
 		sks.Status.MarkEndpointsNotOwned("Endpoints", sn)
-		return fmt.Errorf("SKS: %s does not own Endpoints: %s", sks.Name, sn)
+		owned = false
 	}
-	want := eps.DeepCopy()
-	want.Subsets = srcEps.Subsets
+	if owned {
+		want := eps.DeepCopy()
+		want.Subsets = srcEps.Subsets
 
-	if !equality.Semantic.DeepEqual(want.Subsets, eps.Subsets) {
-		logger.Info("Public K8s Endpoints changed; reconciling: ", sn)
-		if _, err = r.KubeClientSet.CoreV1().Endpoints(sks.Namespace).Update(want); err != nil {
-			logger.Errorw(fmt.Sprint("Error updating public K8s Endpoints:", sn), zap.Error(err))
-			return err
+		if !equality.Semantic.DeepEqual(want.Subsets, eps.Subsets) {
+			logger.Info("Public K8s Endpoints changed; reconciling: ", sn)
+			if _, err = r.KubeClientSet.CoreV1().Endpoints(sks.Namespace).Update(want); err != nil {
+				logger.Errorw(fmt.Sprint("Error updating public K8s Endpoints:", sn), zap.Error(err))
+				return err
+			}
 		}
 	}
+
 	if foundServingEndpoints {
 		sks.Status.MarkEndpointsReady()
 	} else {
@@ -371,11 +374,14 @@ func (r *reconciler) reconcilePrivateService(ctx context.Context, sks *netv1alph
 		sks.Status.MarkEndpointsNotOwned("Service", sn)
 		return fmt.Errorf("SKS: %s does not own Service: %s", sks.Name, sn)
 	}
-	tmpl := resources.MakePrivateService(sks, selector)
+	publicService, err := r.serviceLister.Services(sks.Namespace).Get(sks.Labels["serving.knative.dev/service"])
+	if err != nil {
+		return err
+	}
 	want := svc.DeepCopy()
 	// Our controller manages only part of spec, so set the fields we own.
-	want.Spec.Ports = tmpl.Spec.Ports
-	want.Spec.Selector = tmpl.Spec.Selector
+	want.Spec.Ports = publicService.Spec.Ports
+	want.Spec.Selector = publicService.Spec.Selector
 
 	if !equality.Semantic.DeepEqual(svc.Spec, want.Spec) {
 		sks.Status.MarkEndpointsNotReady("UpdatingPrivateService")
