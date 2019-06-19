@@ -170,6 +170,7 @@ func main() {
 	serviceInformer := kubeInformerFactory.Core().V1().Services()
 	revisionInformer := servingInformerFactory.Serving().V1alpha1().Revisions()
 	sksInformer := servingInformerFactory.Networking().V1alpha1().ServerlessServices()
+	paInformer := servingInformerFactory.Autoscaling().V1alpha1().PodAutoscalers()
 
 	// Run informers instead of starting them from the factory to prevent the sync hanging because of empty handler.
 	if err := controller.StartInformers(
@@ -177,12 +178,13 @@ func main() {
 		revisionInformer.Informer(),
 		endpointInformer.Informer(),
 		serviceInformer.Informer(),
-		sksInformer.Informer()); err != nil {
+		sksInformer.Informer(),
+		paInformer.Informer()); err != nil {
 		logger.Fatalw("Failed to start informers", err)
 	}
 
 	params := queue.BreakerParams{QueueDepth: breakerQueueDepth, MaxConcurrency: breakerMaxConcurrency, InitialCapacity: 0}
-	throttler := activator.NewThrottler(params, endpointInformer, sksInformer.Lister(), revisionInformer.Lister(), logger)
+	throttler := activator.NewThrottler(params, endpointInformer, sksInformer.Lister(), revisionInformer.Lister(), paInformer.Lister(),logger)
 
 	activatorL3 := fmt.Sprintf("%s:%d", activator.K8sServiceName, networking.ServiceHTTPPort)
 	zipkinEndpoint, err := zipkin.NewEndpoint("activator", activatorL3)
