@@ -36,11 +36,15 @@ func newEnvoyScrapeClient(httpClient *http.Client, metric *Metric, podLister cor
 }
 
 func (c *envoyScrapeClient) Scrape(url string) (*Stat, error) {
-	r, err := labels.NewRequirement("app", selection.Equals, []string{c.metric.Name})
+	r1, err := labels.NewRequirement("app", selection.Equals, []string{c.metric.Labels["app"]})
 	if err != nil {
 		return nil, err
 	}
-	selector := labels.NewSelector().Add(*r)
+	r2, err := labels.NewRequirement("version", selection.Equals, []string{c.metric.Labels["version"]})
+	if err != nil {
+		return nil, err
+	}
+	selector := labels.NewSelector().Add(*r1, *r2)
 	pods, err := c.podLister.Pods(c.metric.Namespace).List(selector)
 	if err != nil {
 		return nil, err
