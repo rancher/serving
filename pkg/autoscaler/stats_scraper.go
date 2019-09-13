@@ -156,23 +156,25 @@ func (s *ServiceScraper) Scrape() (*StatMessage, error) {
 	}, nil
 }
 
-type EnvoyScraper struct {
+type ProxyScraper struct {
 	sClient   scrapeClient
 	metricKey string
+	proxyType string
 }
 
-func NewEnvoyScraper(metric *Metric, podLister corev1listers.PodLister) (*EnvoyScraper, error) {
-	sClient, err := newEnvoyScrapeClient(cacheDisabledClient, metric, podLister)
+func NewProxyScraper(metric *Metric, podLister corev1listers.PodLister, proxyType string) (*ProxyScraper, error) {
+	sClient, err := newProxyScrapeClient(cacheDisabledClient, metric, podLister, proxyType)
 	if err != nil {
 		return nil, err
 	}
-	return &EnvoyScraper{
+	return &ProxyScraper{
 		sClient:   sClient,
 		metricKey: NewMetricKey(metric.Namespace, metric.Name),
+		proxyType: proxyType,
 	}, nil
 }
 
-func (e *EnvoyScraper) Scrape() (*StatMessage, error) {
+func (e *ProxyScraper) Scrape() (*StatMessage, error) {
 	stat, err := e.sClient.Scrape("")
 	if err != nil {
 		return nil, err
@@ -181,4 +183,9 @@ func (e *EnvoyScraper) Scrape() (*StatMessage, error) {
 		Stat: *stat,
 		Key:  e.metricKey,
 	}, nil
+}
+
+type LinkerdScraper struct {
+	sClient   scrapeClient
+	metricKey string
 }

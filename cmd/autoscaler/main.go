@@ -194,7 +194,9 @@ func uniScalerFactoryFunc(endpointsInformer corev1informers.EndpointsInformer, m
 func statsScraperFactoryFunc(endpointsLister corev1listers.EndpointsLister, podLister corev1listers.PodLister) func(metric *autoscaler.Metric) (autoscaler.StatsScraper, error) {
 	return func(metric *autoscaler.Metric) (autoscaler.StatsScraper, error) {
 		if metric.Annotations["metric-scrape"] == "envoy" {
-			return autoscaler.NewEnvoyScraper(metric, podLister)
+			return autoscaler.NewProxyScraper(metric, podLister, "envoy")
+		} else if metric.Annotations["metric-scrape"] == "linkerd" {
+			return autoscaler.NewProxyScraper(metric, podLister, "linkerd")
 		}
 		return autoscaler.NewServiceScraper(metric, endpointsLister)
 	}
