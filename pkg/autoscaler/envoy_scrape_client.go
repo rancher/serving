@@ -96,7 +96,7 @@ func (c *proxyScrapeClient) Scrape(url string) (*Stat, error) {
 	} else if c.proxyType == "linkerd" {
 		metricURL = fmt.Sprintf("http://%s:4191/metrics", pod.Status.PodIP)
 		rqMatchCriteria = "request_handle_us_count{direction=\"inbound\"}"
-		acrqMatchCriteria = "tcp_open_connections{direction=\"inbound\",peer=\"src\",tls=\"no_identity\",no_tls_reason=\"not_provided_by_remote\"}"
+		acrqMatchCriteria = "tcp_open_connections{direction=\"inbound\",peer=\"dst\""
 	}
 
 	req, err := http.NewRequest(http.MethodGet, metricURL, nil)
